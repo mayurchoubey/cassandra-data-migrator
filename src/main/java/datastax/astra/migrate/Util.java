@@ -7,7 +7,17 @@ import org.apache.spark.SparkConf;
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.util.Date;
 import java.util.NoSuchElementException;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 
 public class Util {
 
@@ -40,8 +50,25 @@ public class Util {
             throw new RuntimeException("No '" + fileName + "' file found!! Add this file in the current folder & rerun!");
         }
     }
-
-    public static ConsistencyLevel mapToConsistencyLevel(String level) {
+    private static void appendToFile(Path path, String content)
+				throws IOException {
+        // if file not exists, create and write to it
+				// otherwise append to the end of the file
+        Files.write(path, content.getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND);
+	}
+    
+    private static void writeToFile(Path path, String content)
+			throws IOException {
+    // if file not exists, create and write to it
+			// otherwise override existing file
+    Files.write(path, content.getBytes(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+    }
+	
+	public static ConsistencyLevel mapToConsistencyLevel(String level) {
         ConsistencyLevel retVal = ConsistencyLevel.LOCAL_QUORUM;
         if (StringUtils.isNotEmpty(level)) {
             switch (level.toUpperCase()) {
@@ -80,5 +107,21 @@ public class Util {
 
         return retVal;
     }
+    
+	private static final String NEW_LINE = System.lineSeparator();
 
+    public static void FileAppend(String dir, String fileName, String content) throws IOException {
+    	
+    	//create directory if not already existing
+    	Files.createDirectories(Paths.get(dir));
+        Path path = Paths.get(dir + "/" + fileName);
+        appendToFile(path, content + NEW_LINE);
+
+    }
+    
+    public final static String getDateTime()
+    {
+        DateFormat df = new SimpleDateFormat("yyyy-MM-dd_hh_mm_ss");
+        return df.format(new Date());
+    }
 }

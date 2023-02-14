@@ -27,7 +27,7 @@ public class OriginCountJobSession extends BaseJobSession {
     protected List<MigrateDataType> checkTableforColSizeTypes = new ArrayList<MigrateDataType>();
 
     protected OriginCountJobSession(CqlSession sourceSession, SparkConf sc) {
-        super(sc);
+		super(sc);
         this.sourceSession = sourceSession;
         batchSize = new Integer(sc.get("spark.batchSize", "1"));
         printStatsAfter = new Integer(sc.get("spark.printStatsAfter", "100000"));
@@ -61,6 +61,7 @@ public class OriginCountJobSession extends BaseJobSession {
         sourceSelectStatement = sourceSession.prepare(
                 "select " + selectCols + " from " + sourceKeyspaceTable + " where token(" + partionKey.trim()
                         + ") >= ? and token(" + partionKey.trim() + ") <= ?  " + sourceSelectCondition + " ALLOW FILTERING");
+
     }
 
     public static OriginCountJobSession getInstance(CqlSession sourceSession, SparkConf sparkConf) {
@@ -109,6 +110,7 @@ public class OriginCountJobSession extends BaseJobSession {
                             }
                         }
                     }
+
                 } else {
                     BatchStatement batchStatement = BatchStatement.newInstance(BatchType.UNLOGGED);
                     for (Row sourceRow : resultSet) {
@@ -145,6 +147,7 @@ public class OriginCountJobSession extends BaseJobSession {
                         Thread.currentThread().getId(), min, max, retryCount);
             }
         }
+
     }
 
     private int GetRowColumnLength(Row sourceRow, String filterColType, Integer filterColIndex) {

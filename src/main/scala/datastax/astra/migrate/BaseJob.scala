@@ -46,7 +46,10 @@ class BaseJob extends App {
   val maxPartition = new BigInteger(Util.getSparkPropOr(sc, "spark.origin.maxPartition", "9223372036854775807"))
   val coveragePercent = Util.getSparkPropOr(sc, "spark.coveragePercent", "100")
   val splitSize = Integer.parseInt(Util.getSparkPropOr(sc, "spark.splitSize", "10000"))
+  val rowFailureFileSizeLimit = Util.getSparkPropOr(sc, "spark.rowfailure.filesize.limit", "200000000").toLong
 
+  val tokenRangeFile= Util.getSparkPropOr(sc, "spark.input.partitionFile", "./partitions.csv")
+  val failedRowsFile= Util.getSparkPropOr(sc, "spark.input.failedRowsFile", "./failedRows.csv")
   protected def exitSpark() = {
     spark.stop()
     abstractLogger.info("################################################################################################")
