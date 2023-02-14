@@ -15,11 +15,12 @@ import java.util.Set;
 public abstract class BaseJobSession {
 
     protected PreparedStatement sourceSelectStatement;
+    protected PreparedStatement sourceSelectLatestStatement;
     protected PreparedStatement astraSelectStatement;
     protected PreparedStatement astraInsertStatement;
     protected ConsistencyLevel readConsistencyLevel;
     protected ConsistencyLevel writeConsistencyLevel;
-
+    
     // Read/Write Rate limiter
     // Determine the total throughput for the entire cluster in terms of wries/sec,
     // reads/sec
@@ -29,6 +30,7 @@ public abstract class BaseJobSession {
     protected RateLimiter readLimiter;
     protected RateLimiter writeLimiter;
     protected Integer maxRetries = 10;
+    protected Integer maxRetriesRowFailure = 2;
 
     protected CqlSession sourceSession;
     protected CqlSession astraSession;
@@ -57,13 +59,23 @@ public abstract class BaseJobSession {
     protected String filterColName;
     protected String filterColType;
     protected Integer filterColIndex;
-    protected String filterColValue;
+    protected String filterColValue;    
+    
+    protected Boolean enableDefaultTTL = Boolean.FALSE;
+    protected Integer defaultTTL = 7776000; //default TTL as 90days
 
-    protected BaseJobSession(SparkConf sc) {
+    protected Boolean enableDefaultWriteTime = Boolean.FALSE;
+    protected Long defaultWriteTime = 1640998861000l; //default as Saturday, January 1, 2022 2:01:01 AM GMT+01:00 in epoch microseconds
+    
+    protected String tokenRangeExceptionDir;
+    protected String rowExceptionDir;
+    protected String exceptionFileName;
+
+	protected BaseJobSession(SparkConf sc) {
         readConsistencyLevel = Util.mapToConsistencyLevel(Util.getSparkPropOrEmpty(sc, "spark.consistency.read"));
         writeConsistencyLevel = Util.mapToConsistencyLevel(Util.getSparkPropOrEmpty(sc, "spark.consistency.write"));
     }
-
+    
     public String getKey(Row sourceRow) {
         StringBuffer key = new StringBuffer();
         for (int index = 0; index < idColTypes.size(); index++) {

@@ -19,7 +19,6 @@ public class CopyJobSession extends AbstractJobSession {
     protected AtomicLong readCounter = new AtomicLong(0);
     protected AtomicLong skippedCounter = new AtomicLong(0);
     protected AtomicLong writeCounter = new AtomicLong(0);
-    protected AtomicLong errorCounter = new AtomicLong(0);
 
     protected CopyJobSession(CqlSession sourceSession, CqlSession astraSession, SparkConf sc) {
         super(sourceSession, astraSession, sc);
@@ -45,15 +44,10 @@ public class CopyJobSession extends AbstractJobSession {
     public void getDataAndInsert(BigInteger min, BigInteger max) {
         logger.info("ThreadID: {} Processing min: {} max: {}", Thread.currentThread().getId(), min, max);
         int maxAttempts = maxRetries;
-        boolean done = false;
+        for (int retryCount = 1; retryCount <= maxAttempts; retryCount++) {
 
-        for (int retryCount = 1; retryCount <= maxAttempts && !done; retryCount++) {
-            long readCnt = 0;
-            long writeCnt = 0;
-            long skipCnt = 0;
-            long errCnt = 0;
             try {
-                ResultSet resultSet = sourceSession.execute(sourceSelectStatement.bind(hasRandomPartitioner ?
+               ResultSet resultSet = sourceSession.execute(sourceSelectStatement.bind(hasRandomPartitioner ?
                                 min : min.longValueExact(), hasRandomPartitioner ? max : max.longValueExact())
                         .setConsistencyLevel(readConsistencyLevel).setPageSize(fetchSizeInRows));
 
@@ -65,30 +59,31 @@ public class CopyJobSession extends AbstractJobSession {
                 if (batchSize == 1 || writeTimeStampFilter || isCounterTable) {
                     for (Row sourceRow : resultSet) {
                         readLimiter.acquire(1);
-                        readCnt++;
-                        if (readCnt % printStatsAfter == 0) {
-                            printCounts(false);
-                        }
 
                         if (filterData) {
                             String col = (String) getData(new MigrateDataType(filterColType), filterColIndex, sourceRow);
                             if (col.trim().equalsIgnoreCase(filterColValue)) {
                                 logger.warn("Skipping row and filtering out: {}", getKey(sourceRow));
-                                skipCnt++;
+                                skippedCounter.incrementAndGet();
                                 continue;
                             }
                         }
+
                         if (writeTimeStampFilter) {
                             // only process rows greater than writeTimeStampFilter
                             Long sourceWriteTimeStamp = getLargestWriteTimeStamp(sourceRow);
                             if (sourceWriteTimeStamp < minWriteTimeStampFilter
                                     || sourceWriteTimeStamp > maxWriteTimeStampFilter) {
-                                skipCnt++;
+                                readCounter.incrementAndGet();
+                                skippedCounter.incrementAndGet();
                                 continue;
                             }
                         }
-                        writeLimiter.acquire(1);
 
+                        writeLimiter.acquire(1);
+                        if (readCounter.incrementAndGet() % printStatsAfter == 0) {
+                            printCounts(false);
+                        }
                         Row astraRow = null;
                         if (isCounterTable) {
                             ResultSet astraReadResultSet = astraSession
@@ -96,22 +91,23 @@ public class CopyJobSession extends AbstractJobSession {
                             astraRow = astraReadResultSet.one();
                         }
 
+
                         CompletionStage<AsyncResultSet> astraWriteResultSet = astraSession
                                 .executeAsync(bindInsert(astraInsertStatement, sourceRow, astraRow));
                         writeResults.add(astraWriteResultSet);
                         if (writeResults.size() > fetchSizeInRows) {
-                            writeCnt += iterateAndClearWriteResults(writeResults, 1);
+                            iterateAndClearWriteResults(writeResults, 1);
                         }
                     }
 
                     // clear the write resultset
-                    writeCnt += iterateAndClearWriteResults(writeResults, 1);
+                    iterateAndClearWriteResults(writeResults, 1);
                 } else {
                     BatchStatement batchStatement = BatchStatement.newInstance(BatchType.UNLOGGED);
                     for (Row sourceRow : resultSet) {
                         readLimiter.acquire(1);
-                        readCnt++;
-                        if (readCnt % printStatsAfter == 0) {
+                        writeLimiter.acquire(1);
+                        if (readCounter.incrementAndGet() % printStatsAfter == 0) {
                             printCounts(false);
                         }
 
@@ -119,12 +115,11 @@ public class CopyJobSession extends AbstractJobSession {
                             String colValue = (String) getData(new MigrateDataType(filterColType), filterColIndex, sourceRow);
                             if (colValue.trim().equalsIgnoreCase(filterColValue)) {
                                 logger.warn("Skipping row and filtering out: {}", getKey(sourceRow));
-                                skipCnt++;
+                                skippedCounter.incrementAndGet();
                                 continue;
                             }
                         }
 
-                        writeLimiter.acquire(1);
                         batchStatement = batchStatement.add(bindInsert(astraInsertStatement, sourceRow, null));
 
                         // if batch threshold is met, send the writes and clear the batch
@@ -135,37 +130,27 @@ public class CopyJobSession extends AbstractJobSession {
                         }
 
                         if (writeResults.size() * batchSize > fetchSizeInRows) {
-                            writeCnt += iterateAndClearWriteResults(writeResults, batchSize);
+                            iterateAndClearWriteResults(writeResults, batchSize);
                         }
                     }
 
                     // clear the write resultset
-                    writeCnt += iterateAndClearWriteResults(writeResults, batchSize);
+                    iterateAndClearWriteResults(writeResults, batchSize);
 
                     // if there are any pending writes because the batchSize threshold was not met, then write and clear them
                     if (batchStatement.size() > 0) {
                         CompletionStage<AsyncResultSet> writeResultSet = astraSession.executeAsync(batchStatement);
                         writeResults.add(writeResultSet);
-                        writeCnt += iterateAndClearWriteResults(writeResults, batchStatement.size());
+                        iterateAndClearWriteResults(writeResults, batchStatement.size());
                         batchStatement = BatchStatement.newInstance(BatchType.UNLOGGED);
                     }
                 }
 
-                readCounter.addAndGet(readCnt);
-                writeCounter.addAndGet(writeCnt);
-                skippedCounter.addAndGet(skipCnt);
-                done = true;
+                retryCount = maxAttempts;
             } catch (Exception e) {
-                if (retryCount == maxAttempts) {
-                    readCounter.addAndGet(readCnt);
-                    writeCounter.addAndGet(writeCnt);
-                    skippedCounter.addAndGet(skipCnt);
-                    errorCounter.addAndGet(readCnt - writeCnt - skipCnt);
-                }
                 logger.error("Error occurred retry#: {}", retryCount, e);
                 logger.error("Error with PartitionRange -- ThreadID: {} Processing min: {} max: {} -- Retry# {}",
                         Thread.currentThread().getId(), min, max, retryCount);
-                logger.error("Error stats Read#: {}, Wrote#: {}, Skipped#: {}, Error#: {}", readCnt, writeCnt, skipCnt, (readCnt - writeCnt - skipCnt));
             }
         }
     }
@@ -179,22 +164,18 @@ public class CopyJobSession extends AbstractJobSession {
         logger.info("{} Read Record Count: {}", msg, readCounter.get());
         logger.info("{} Skipped Record Count: {}", msg, skippedCounter.get());
         logger.info("{} Write Record Count: {}", msg, writeCounter.get());
-        logger.info("{} Error Record Count: {}", msg, errorCounter.get());
         if (isFinal) {
             logger.info("################################################################################################");
         }
     }
 
-    private int iterateAndClearWriteResults(Collection<CompletionStage<AsyncResultSet>> writeResults, int incrementBy) throws Exception {
-        int cnt = 0;
+    private void iterateAndClearWriteResults(Collection<CompletionStage<AsyncResultSet>> writeResults, int incrementBy) throws Exception {
         for (CompletionStage<AsyncResultSet> writeResult : writeResults) {
             //wait for the writes to complete for the batch. The Retry policy, if defined,  should retry the write on timeouts.
             writeResult.toCompletableFuture().get().one();
-            cnt += incrementBy;
+            writeCounter.addAndGet(incrementBy);
         }
         writeResults.clear();
-
-        return cnt;
     }
 
 }
